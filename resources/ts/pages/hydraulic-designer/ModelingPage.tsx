@@ -1,0 +1,353 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import LibraryPanel from '../../components/LibraryPanel';
+import MiniMapOverlay, { type StageViewport } from '../../dashboard/MiniMapOverlay';
+import EditorCanvas from '../../components/EditorCanvas';
+import Topbar from '../../components/Topbar';
+import ManometerPanel from '../../components/ManometerPanel';
+import PropertiesPanel from '../../components/PropertiesPanel';
+import PropertiesView from '../../components/PropertiesView';
+import { useModelStore } from '../../state/store';
+import { useHydraulicDesignerLayout } from './LayoutContext';
+import { CANVAS_ID, STAGE_ID } from './constants';
+
+type TabType = 'components' | 'properties';
+
+const ModelingPage = (): JSX.Element => {
+  const { isFullscreen, setIsFullscreen } = useHydraulicDesignerLayout();
+  const {
+    model,
+    selection,
+    setSelection,
+    updateNode,
+    addPipe,
+    removeNode,
+    removePipe,
+    addTank,
+    addPump,
+    addJunction,
+  } = useModelStore((state) => ({
+    model: state.model,
+    selection: state.selection,
+    setSelection: state.setSelection,
+    updateNode: state.updateNode,
+    addPipe: state.addPipe,
+    removeNode: state.removeNode,
+    removePipe: state.removePipe,
+    addTank: state.addTank,
+    addPump: state.addPump,
+    addJunction: state.addJunction,
+  }));
+
+  // Estados locales
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [viewport, setViewport] = useState<StageViewport | null>(null);
+  const [viewportAnchor, setViewportAnchor] = useState<{ x: number; y: number; token: number } | null>(null);
+  const [pipeToolActive, setPipeToolActive] = useState(false);
+  const [scale, setScale] = useState(1);
+  const [activeTab, setActiveTab] = useState<TabType>('components');
+  const controlsDockRef = useRef<HTMLDivElement | null>(null);
+
+  // Allow normal responsive behavior by default. Use layout context to toggle fullscreen.
+  const forceFullscreen = false;
+
+  // Callbacks de zoom
+  const handleZoomIn = useCallback(() => {
+    setScale((prev) => Math.min(prev * 1.2, 4));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setScale((prev) => Math.max(prev / 1.2, 0.25));
+  }, []);
+
+  const handleResetView = useCallback(() => {
+    setScale(1);
+    setViewportAnchor({ x: 0, y: 0, token: Date.now() });
+  }, []);
+
+  // Callbacks de viewport
+  const handleViewportChange = useCallback((next: StageViewport) => {
+    setViewport(next);
+  }, []);
+
+  const handleMiniMapNavigate = useCallback((target: { x: number; y: number }) => {
+    setViewportAnchor({ ...target, token: Date.now() });
+  }, []);
+
+  const handleFocusControlsDock = useCallback(() => {
+    if (!controlsDockRef.current) return;
+    controlsDockRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, []);
+
+  // Callbacks de herramientas
+  const handleStartPipeTool = useCallback(() => {
+    setPipeToolActive(true);
+  }, []);
+
+  const handleCancelPipeTool = useCallback(() => {
+    setPipeToolActive(false);
+  }, []);
+
+  const togglePipeTool = useCallback(() => {
+    setPipeToolActive((prev) => !prev);
+  }, []);
+
+  const toggleSnap = useCallback(() => {
+    setSnapEnabled((prev) => !prev);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!forceFullscreen) {
+      setIsFullscreen((prev) => !prev);
+    }
+  }, [forceFullscreen, setIsFullscreen]);
+
+  // Callback para actualización de nodos
+  const handleNodeUpdate = useCallback(
+    (id: string, updates: any) => {
+      updateNode(id, (current) => ({
+        ...current,
+        ...(updates as any),
+        position: updates.position ?? current.position,
+        properties:
+          updates && 'properties' in updates && updates.properties
+            ? { ...(current as any).properties, ...(updates as any).properties }
+            : (current as any).properties,
+      }));
+    },
+    [updateNode]
+  );
+
+  // Normalizar modelo para el canvas
+  const normalizedModel = {
+    nodes: model.nodes.map((node) => ({
+      ...node,
+      groupId: node.groupId || undefined,
+    })),
+    pipes: model.pipes,
+    units: model.units === 'US' ? ('imperial' as const) : ('metric' as const),
+  };
+
+  // Efectos
+  useEffect(() => {
+    if (forceFullscreen) setIsFullscreen(true);
+  }, [forceFullscreen, setIsFullscreen]);
+
+  useEffect(() => {
+    if (!isFullscreen || forceFullscreen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown, { passive: true });
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [forceFullscreen, isFullscreen, setIsFullscreen]);
+
+  useEffect(() => {
+    setPipeToolActive(false);
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    return () => {
+      if (!forceFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+  }, [forceFullscreen, setIsFullscreen]);
+
+  // Clases CSS dinámicas
+  // Base container constrained to a sensible max width to avoid extreme stretching on large screens.
+  const containerClasses = `mx-auto max-w-screen-2xl space-y-6 rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur transition-all duration-300 ${
+    isFullscreen ? 'flex h-full max-w-7xl flex-col shadow-2xl ring-1 ring-cyan-500/10' : ''
+  }`;
+
+  const canvasHeightClass = isFullscreen
+    ? 'min-h-[65vh] h-[85vh] lg:h-[88vh] xl:h-[90vh]'
+    : 'h-[580px]';
+
+  const gridColumns = isFullscreen
+    ? 'grid-cols-1 xl:grid-cols-[minmax(0,2.5fr)_minmax(0,1fr)]'
+    : 'grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]';
+
+  return (
+    <div className={containerClasses}>
+      <Topbar isFullscreen={isFullscreen} />
+      
+      <div className={`grid gap-6 ${gridColumns} min-h-0`}> 
+        {/* Área principal de diseño */}
+  <div className="space-y-6 min-w-0">
+          {/* Canvas del editor */}
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3 shadow-lg shadow-slate-950/10">
+            {/* Allow scrolling inside the canvas container to avoid content being clipped on small viewports */}
+            <div className={`flex ${canvasHeightClass} overflow-auto rounded-xl border border-slate-800/60 bg-slate-950/70`}>
+              <EditorCanvas
+                model={normalizedModel}
+                selection={selection}
+                onSelectionChange={setSelection}
+                onNodeUpdate={handleNodeUpdate}
+                onPipeAdd={addPipe}
+                isFullscreen={isFullscreen}
+                onToggleFullscreen={toggleFullscreen}
+                snapToGrid={snapEnabled}
+                onToggleSnap={toggleSnap}
+              />
+            </div>
+          </div>
+
+          {/* Controles y panel de herramientas */}
+          <div ref={controlsDockRef} className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg shadow-slate-950/10 min-w-0">
+            {/* Barra de controles superiores */}
+            <div className="mb-4 flex items-center justify-between">
+              <button
+                onClick={toggleSnap}
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  snapEnabled
+                    ? 'bg-cyan-500/20 text-cyan-100 ring-1 ring-cyan-500/40'
+                    : 'bg-white/5 text-white/70 hover:bg-white/10'
+                }`}
+              >
+                Ajuste a cuadrícula
+              </button>
+              
+              {!forceFullscreen && (
+                <button
+                  onClick={toggleFullscreen}
+                  className="rounded-lg bg-white/5 px-3 py-2 text-sm font-medium text-white/70 transition-colors hover:bg-white/10"
+                >
+                  {isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+                </button>
+              )}
+            </div>
+
+            {/* Pestañas */}
+            <div className="flex border-b border-white/10">
+              <button
+                onClick={() => setActiveTab('components')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500 ${
+                  activeTab === 'components'
+                    ? 'text-white/90 bg-white/5'
+                    : 'text-white/60 hover:bg-white/5'
+                }`}
+              >
+                Componentes
+              </button>
+              <button
+                onClick={() => setActiveTab('properties')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500 ${
+                  activeTab === 'properties'
+                    ? 'text-white/90 bg-white/5'
+                    : 'text-white/60 hover:bg-white/5'
+                }`}
+              >
+                Propiedades
+              </button>
+            </div>
+
+            {/* Contenido de pestañas */}
+            {activeTab === 'components' ? (
+              <div className="p-4">
+                {/* Grid de componentes */}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+                  <button
+                    onClick={() => addTank()}
+                    className="flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-white/70 transition-all hover:border-cyan-500/30 hover:bg-cyan-500/10 hover:text-cyan-100"
+                  >
+                    <svg className="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <rect x="4" y="6" width="16" height="12" rx="2" strokeWidth="2" />
+                      <path d="M4 10h16" strokeWidth="2" />
+                    </svg>
+                    <span className="text-xs font-medium">Tanque</span>
+                  </button>
+
+                  <button
+                    onClick={() => addPump()}
+                    className="flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-white/70 transition-all hover:border-cyan-500/30 hover:bg-cyan-500/10 hover:text-cyan-100"
+                  >
+                    <svg className="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <circle cx="12" cy="12" r="6" strokeWidth="2" />
+                      <path d="M12 8v8M8 12h8" strokeWidth="2" />
+                    </svg>
+                    <span className="text-xs font-medium">Bomba</span>
+                  </button>
+
+                  <button
+                    onClick={() => addJunction()}
+                    className="flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-white/70 transition-all hover:border-cyan-500/30 hover:bg-cyan-500/10 hover:text-cyan-100"
+                  >
+                    <svg className="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <circle cx="12" cy="12" r="4" strokeWidth="2" />
+                      <path d="M12 4v4M12 16v4M4 12h4M16 12h4" strokeWidth="2" />
+                    </svg>
+                    <span className="text-xs font-medium">Unión</span>
+                  </button>
+
+                  <button
+                    onClick={togglePipeTool}
+                    className={`flex flex-col items-center gap-2 rounded-xl border p-3 transition-all ${
+                      pipeToolActive
+                        ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100'
+                        : 'border-white/10 bg-white/5 text-white/70 hover:border-cyan-500/30 hover:bg-cyan-500/10 hover:text-cyan-100'
+                    }`}
+                  >
+                    <svg className="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M4 12h16" strokeWidth="2" strokeLinecap="round" />
+                      <circle cx="4" cy="12" r="2" strokeWidth="2" />
+                      <circle cx="20" cy="12" r="2" strokeWidth="2" />
+                    </svg>
+                    <span className="text-xs font-medium">Tubería</span>
+                  </button>
+                </div>
+
+                {/* Atajos de teclado */}
+                <div className="mt-6 space-y-3">
+                  <p className="text-xs font-medium uppercase tracking-wider text-white/40">
+                    Atajos útiles
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-white/60">
+                    <div className="flex items-center gap-2">
+                      <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px]">Del</kbd>
+                      <span>Eliminar</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px]">→←</kbd>
+                      <span>Mover</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px]">Esc</kbd>
+                      <span>Cancelar</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px]">Ctrl+Z</kbd>
+                      <span>Deshacer</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4">
+                <PropertiesPanel />
+              </div>
+            )}
+          </div>
+
+          {/* Panel de manómetros */}
+          <ManometerPanel />
+        </div>
+
+  {/* Panel lateral de propiedades */}
+  <aside className="space-y-6 min-w-0 w-full lg:w-[420px] xl:w-[480px]">
+          <PropertiesView
+            title="Propiedades"
+            subtitle={
+              selection
+                ? 'Elemento seleccionado'
+                : 'Selecciona un elemento del esquema para editar sus atributos'
+            }
+          >
+            <PropertiesPanel />
+          </PropertiesView>
+        </aside>
+      </div>
+    </div>
+  );
+};
+
+export default ModelingPage;
